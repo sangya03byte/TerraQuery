@@ -14,10 +14,16 @@ import {
 } from './src/data/climateData.js';
 import {
   executeGeneratedQuery,
-  getDistrictRainfallMapData
+  getDistrictRainfallMapData,
+  getStateRainfallMapData,
+  getRecordsByDistrict
+
 } from './src/services/mongoQueryService.js';
 
-import { generateMongoQuery } from './src/services/geminiQueryService.js';
+import {
+  generateMongoQuery,
+  generateResultExplanation
+} from './src/services/geminiQueryService.js';
 import { validateMongoQuery } from './src/services/queryValidator.js';
 
 const PORT = process.env.PORT || 5000;
@@ -205,14 +211,20 @@ const server = http.createServer(async (req, res) => {
 
       console.log('🧠 Generating MongoDB query with Gemini...');
 
-      const generatedQuery = await generateMongoQuery(question);
+      const generatedResponse = await generateMongoQuery(question);
 
-      console.log('✅ Gemini query generated:');
-      console.dir(generatedQuery, { depth: null });
+      const generatedQuery = generatedResponse.query;
+      const visualization = generatedResponse.visualization;
 
-      // ---------------------------------------------------
-      // STEP 2: Validate generated query
-      // ---------------------------------------------------
+      console.log('✅ Gemini response generated:');
+      console.dir(generatedResponse, { depth: null });
+
+      console.log('🎨 Visualization plan:');
+      console.dir(visualization, { depth: null });
+
+// ---------------------------------------------------
+// STEP 2: Validate generated query
+// ---------------------------------------------------
 
       console.log('🛡️ Validating query...');
 
@@ -227,9 +239,19 @@ const server = http.createServer(async (req, res) => {
       console.log('☁️ Executing query on MongoDB Atlas...');
 
       const results = await executeGeneratedQuery(generatedQuery);
-
-      console.log('✅ MongoDB query executed');
+       console.log('✅ MongoDB query executed');
       console.log('📊 Result count:', results.length);
+      console.log('📊 First MongoDB record:', results[0]);
+      console.log('🧠 Generating result explanation with Gemini...');
+
+      const explanation = await generateResultExplanation(
+      question,
+      results
+    );
+
+console.log('✅ Result explanation generated');
+console.log(explanation);
+     
 
       console.log('==============================================\n');
 
@@ -254,7 +276,7 @@ const server = http.createServer(async (req, res) => {
         },
 
         query: generatedQuery,
-
+        visualization,
         validation: {
           passed: true,
           readOnly: true
@@ -264,7 +286,7 @@ const server = http.createServer(async (req, res) => {
           count: results.length,
           records: results
         },
-
+        explanation,
         timestamp: new Date().toISOString()
       });
     }
@@ -294,6 +316,66 @@ const server = http.createServer(async (req, res) => {
 
       }
     }
+    if (pathname === '/api/map/rainfall/states' && req.method === 'GET') {
+
+      try {
+
+         const data = await getStateRainfallMapData();
+
+         return sendJSON(res, 200, {
+            success: true,
+            records: data
+      });
+
+  } catch (error) {
+
+    console.error('State rainfall map error:', error);
+
+    return sendJSON(res, 500, {
+      success: false,
+      error: error.message
+    });
+
+  }
+}
+// =====================================================
+// DISTRICT DRILL-DOWN API
+// =====================================================
+if (
+  req.method === 'GET' &&
+  pathname.startsWith('/api/district/')
+) {
+  try {
+    const district = decodeURIComponent(
+      pathname.slice('/api/district/'.length)
+    ).trim();
+
+    if (!district) {
+      return sendJSON(res, 400, {
+        success: false,
+        error: 'District name is required.'
+      });
+    }
+
+    console.log(`[District drill-down] ${district}`);
+
+    const records = await getRecordsByDistrict(district);
+
+    return sendJSON(res, 200, {
+      success: true,
+      district: district.toUpperCase(),
+      count: records.length,
+      records
+    });
+  } catch (error) {
+    console.error('District drill-down error:', error);
+
+    return sendJSON(res, 500, {
+      success: false,
+      error: error.message
+    });
+  }
+}
     // =====================================================
     // 4. DATASET EXPLORATION API
     // =====================================================
